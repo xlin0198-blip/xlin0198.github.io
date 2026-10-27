@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>10秒擠泡泡</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: linear-gradient(180deg, #f8fbff, #eef6ff);
+      color: #1f2d3d;
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; padding: 16px;
+    }
+    .game-wrap {
+      width: min(96vw, 420px);
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 10px 30px rgba(50, 90, 160, 0.15);
+      padding: 16px;
+    }
+    .top {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px; font-size: 16px; font-weight: 700;
+    }
+    .timer { color: #ff5a5f; }
+    .progress { color: #4a79ff; }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+      background: #f3f8ff;
+      border-radius: 16px;
+      padding: 12px;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    .bubble {
+      width: 100%;
+      aspect-ratio: 1/1;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffffff 0%, #dbe9ff 45%, #bfd6ff 100%);
+      border: 1px solid #c7dcff;
+      box-shadow: inset 2px 2px 6px rgba(255,255,255,0.85),
+                  inset -6px -6px 10px rgba(120,160,220,0.2),
+                  0 3px 8px rgba(120,160,220,0.2);
+      transition: transform .08s ease, opacity .18s ease, filter .18s ease;
+      cursor: pointer;
+    }
+    .bubble:active { transform: scale(0.94); }
+    .bubble.popped {
+      opacity: 0.25;
+      filter: grayscale(0.25);
+      background: radial-gradient(circle at 45% 40%, #eef3ff 0%, #dbe7ff 70%, #cadbff 100%);
+      box-shadow: inset 1px 1px 3px rgba(255,255,255,0.8);
+      cursor: default;
+    }
+    .controls {
+      margin-top: 14px;
+      display: flex; gap: 10px;
+    }
+    button {
+      flex: 1;
+      border: none; border-radius: 12px;
+      padding: 12px 14px;
+      font-weight: 700; font-size: 15px;
+      cursor: pointer;
+    }
+    #startBtn { background: #4a79ff; color: white; }
+    #restartBtn { background: #edf3ff; color: #3052ad; }
+    .msg {
+      margin-top: 10px;
+      min-height: 24px;
+      text-align: center;
+      font-weight: 700;
+      color: #2c4a90;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-wrap">
+    <div class="top">
+      <div class="timer">⏱ 剩餘：<span id="time">10.0</span>s</div>
+      <div class="progress">🫧 <span id="done">0</span>/<span id="total">30</span></div>
+    </div>
+
+    <div id="board" class="board"></div>
+
+    <div class="controls">
+      <button id="startBtn">開始遊戲</button>
+      <button id="restartBtn">重新生成</button>
+    </div>
+
+    <div class="msg" id="msg">10 秒內把泡泡全部擠完！</div>
+  </div>
+
+  <script>
+    const ROWS = 5, COLS = 6;
+    const TOTAL = ROWS * COLS;
+    const GAME_TIME = 10.0;
+
+    const board = document.getElementById('board');
+    const timeEl = document.getElementById('time');
+    const doneEl = document.getElementById('done');
+    const totalEl = document.getElementById('total');
+    const msgEl = document.getElementById('msg');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    totalEl.textContent = TOTAL;
+
+    let poppedCount = 0;
+    let running = false;
+    let startAt = 0;
+    let rafId = null;
+    let audioCtx = null;
+
+    function initAudio() {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    // 療癒擠泡泡音：短促 pop + 柔和 chime
+    function playPopSound() {
+      if (!audioCtx) return;
+
+      const now = audioCtx.currentTime;
+      const base = 520 + Math.random() * 220; // 520~740 Hz
+
+      // pop（短促）
+      const osc1 = audioCtx.createOscillator();
+      const gain1 = audioCtx.createGain();
+      osc1.type = 'triangle';
+      osc1.frequency.setValueAtTime(base, now);
+      osc1.frequency.exponentialRampToValueAtTime(260, now + 0.06);
+      gain1.gain.setValueAtTime(0.0001, now);
+      gain1.gain.exponentialRampToValueAtTime(0.10, now + 0.005);
+      gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+      osc1.connect(gain1).connect(audioCtx.destination);
+      osc1.start(now); osc1.stop(now + 0.095);
+
+      // chime（療癒尾音）
+      const osc2 = audioCtx.createOscillator();
+      const gain2 = audioCtx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(base * 1.5, now + 0.01);
+      gain2.gain.setValueAtTime(0.0001, now + 0.01);
+      gain2.gain.exponentialRampToValueAtTime(0.05, now + 0.02);
+      gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+      osc2.connect(gain2).connect(audioCtx.destination);
+      osc2.start(now + 0.01); osc2.stop(now + 0.2);
+    }
+
+    function createBoard() {
+      board.innerHTML = '';
+      poppedCount = 0;
+      doneEl.textContent = poppedCount;
+      msgEl.textContent = '10 秒內把泡泡全部擠完！';
+      timeEl.textContent = GAME_TIME.toFixed(1);
+
+      for (let i = 0; i < TOTAL; i++) {
+        const b = document.createElement('button');
+        b.className = 'bubble';
+        b.dataset.popped = '0';
+        b.addEventListener('click', onBubblePress, { passive: true });
+        board.appendChild(b);
+      }
+    }
+
+    function onBubblePress(e) {
+      if (!running) return;
+      const el = e.currentTarget;
+      if (el.dataset.popped === '1') return;
+      el.dataset.popped = '1';
+      el.classList.add('popped');
+      poppedCount++;
+      doneEl.textContent = poppedCount;
+      playPopSound();
+
+      if (poppedCount >= TOTAL) {
+        endGame(true);
+      }
+    }
+
+    function startGame() {
+      initAudio();
+      createBoard();
+      running = true;
+      startAt = performance.now();
+      tick();
+    }
+
+    function tick() {
+      if (!running) return;
+      const elapsed = (performance.now() - startAt) / 1000;
+      const left = Math.max(0, GAME_TIME - elapsed);
+      timeEl.textContent = left.toFixed(1);
+
+      if (left <= 0) {
+        endGame(false);
+        return;
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function endGame(win) {
+      running = false;
+      cancelAnimationFrame(rafId);
+
+      if (win) {
+        msgEl.textContent = '🎉 成功！你在 10 秒內擠完了！';
+      } else {
+        msgEl.textContent = `⌛ 時間到！你擠了 ${poppedCount}/${TOTAL} 顆，再試一次！`;
+      }
+    }
+
+    startBtn.addEventListener('click', startGame);
+    restartBtn.addEventListener('click', () => {
+      running = false;
+      cancelAnimationFrame(rafId);
+      createBoard();
+    });
+
+    createBoard();
+  </script>
+</body>
+</html>
