@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>中文詞語接龍（人機對戰）</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: #f4f7ff;
+      color: #1f2d3d;
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      width: min(95vw, 720px);
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      padding: 16px;
+    }
+    h1 { margin: 0 0 10px; font-size: 22px; }
+    .info {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .box {
+      background: #f0f5ff;
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+      font-weight: 700;
+    }
+    .timer { color: #ff4d4f; }
+    .required { color: #2f54eb; }
+    .log {
+      background: #fafbff;
+      border: 1px solid #e6ecff;
+      border-radius: 10px;
+      height: 320px;
+      overflow: auto;
+      padding: 10px;
+      margin-bottom: 12px;
+      line-height: 1.7;
+      font-size: 15px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+    input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid #cdd8ff;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+    button {
+      padding: 10px 14px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    #submitBtn { background: #2f54eb; color: #fff; }
+    #restartBtn { background: #eef2ff; color: #2f54eb; }
+    .status {
+      margin-top: 10px;
+      font-weight: 700;
+      min-height: 22px;
+    }
+    .ok { color: #237804; }
+    .bad { color: #cf1322; }
+    .muted { color: #666; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🧠 中文詞語接龍（人機）</h1>
+    <div class="info">
+      <div class="box">回合：<span id="turn">玩家</span></div>
+      <div class="box timer">剩餘：<span id="time">10.0</span> 秒</div>
+      <div class="box required">需以「<span id="required">-</span>」開頭</div>
+    </div>
+
+    <div id="log" class="log"></div>
+
+    <div class="row">
+      <input id="input" placeholder="輸入詞語（例：心情）" autocomplete="off" />
+      <button id="submitBtn">送出</button>
+      <button id="restartBtn">重新開始</button>
+    </div>
+    <div id="status" class="status muted">規則：不可重複、必須接上一詞最後一字、你每回合限時10秒。</div>
+  </div>
+
+  <script>
+    // 可自行擴充詞庫（建議 2~4 字詞語）
+    const WORDS = [
+      "開心","心情","情緒","緒論","論文","文化","化學","學習","習慣","慣例","例子","子女","女生","生活","活動","動力","力量","量詞","詞語","語言","言論","論點","點子","子民","民心",
+      "天氣","氣氛","氛圍","圍觀","觀點","點頭","頭腦","腦力","力量","量產","產品","品質","質感","感動","動畫","畫面","面試","試題","題目","目標","標準",
+      "城市","市場","場所","所有","有人","人生","生活","活力","力氣","氣球","球隊","隊友","友情","情人","人物","物理","理解","解答","答案",
+      "工作","作品","品牌","牌照","照片","片段","段落","落地","地圖","圖片","片語","語法","法規","規劃","畫家","家庭","庭院","院長","長大","大小","小學","學生","生物","物件",
+      "時間","間隔","隔壁","壁畫","畫筆","筆記","記憶","憶述","述說","說話","話題","題材","材料","料理","理解","解釋","釋放","放心","心意","意見","見面","面包","包子",
+      "朋友","友善","善意","意思","思考","考試","試用","用心","心靈","靈感","感覺","覺察","察看","看見","見識","識字","字典","典禮"
+    ];
+
+    const MAX_TIME = 10.0;
+
+    const logEl = document.getElementById("log");
+    const turnEl = document.getElementById("turn");
+    const timeEl = document.getElementById("time");
+    const reqEl = document.getElementById("required");
+    const inputEl = document.getElementById("input");
+    const submitBtn = document.getElementById("submitBtn");
+    const restartBtn = document.getElementById("restartBtn");
+    const statusEl = document.getElementById("status");
+
+    let used = new Set();
+    let currentWord = "";
+    let requiredChar = "";
+    let playerTurn = true;
+    let timer = MAX_TIME;
+    let timerId = null;
+    let gameOver = false;
+
+    function normalize(w) {
+      return w.replace(/\s+/g, "").trim();
+    }
+
+    function firstChar(w) { return normalize(w).charAt(0); }
+    function lastChar(w) {
+      const n = normalize(w);
+      return n.charAt(n.length - 1);
+    }
+
+    function addLog(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text, cls = "muted") {
+      statusEl.className = `status ${cls}`;
+      statusEl.textContent = text;
+    }
+
+    function updateUI() {
+      turnEl.textContent = playerTurn ? "玩家" : "電腦";
+      reqEl.textContent = requiredChar || "-";
+      timeEl.textContent = timer.toFixed(1);
+      inputEl.disabled = !playerTurn || gameOver;
+      submitBtn.disabled = !playerTurn || gameOver;
+    }
+
+    function stopTimer() {
+      if (timerId) clearInterval(timerId);
+      timerId = null;
+    }
+
+    function startPlayerTimer() {
+      stopTimer();
+      timer = MAX_TIME;
+      updateUI();
+      timerId = setInterval(() => {
+        timer -= 0.1;
+        if (timer <= 0) {
+          timer = 0;
+          updateUI();
+          loseByTimeout();
+          return;
+        }
+        updateUI();
+      }, 100);
+    }
+
+    function loseByTimeout() {
+      stopTimer();
+      gameOver = true;
+      updateUI();
+      addLog("⏰ 玩家超時（10秒）！");
+      setStatus("你輸了：超時未接龍。", "bad");
+    }
+
+    function isValidWord(word) {
+      const w = normalize(word);
+      if (!w) return "請輸入詞語";
+      if (!WORDS.includes(w)) return "詞庫中沒有這個詞（可自行擴充）";
+      if (used.has(w)) return "這個詞已使用過";
+      if (requiredChar && firstChar(w) !== requiredChar) {
+        return `必須以「${requiredChar}」開頭`;
+      }
+      return "";
+    }
+
+    function getBotWord() {
+      const candidates = WORDS.filter(w =>
+        !used.has(w) && firstChar(w) === requiredChar
+      );
+      if (candidates.length === 0) return "";
+      // 簡單策略：隨機
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+
+    function playerSubmit() {
+      if (!playerTurn || gameOver) return;
+      const word = normalize(inputEl.value);
+      const err = isValidWord(word);
+      if (err) {
+        setStatus(`❌ ${err}`, "bad");
+        return;
+      }
+
+      stopTimer();
+      used.add(word);
+      currentWord = word;
+      requiredChar = lastChar(word);
+      addLog(`🧑 玩家：${word}`);
+      inputEl.value = "";
+      setStatus("✅ 接龍成功，輪到電腦...", "ok");
+
+      // 切換到電腦
+      playerTurn = false;
+      updateUI();
+
+      setTimeout(botPlay, 700);
+    }
+
+    function botPlay() {
+      if (gameOver) return;
+      const botWord = getBotWord();
+
+      if (!botWord) {
+        gameOver = true;
+        addLog("🤖 電腦：我接不下去了...");
+        setStatus("🎉 你贏了！電腦無詞可接。", "ok");
+        updateUI();
+        return;
+      }
+
+      used.add(botWord);
+      currentWord = botWord;
+      requiredChar = lastChar(botWord);
+      addLog(`🤖 電腦：${botWord}`);
+      setStatus("輪到你，請在 10 秒內作答！", "muted");
+
+      playerTurn = true;
+      timer = MAX_TIME;
+      updateUI();
+      startPlayerTimer();
+      inputEl.focus();
+    }
+
+    function startGame() {
+      stopTimer();
+      used = new Set();
+      gameOver = false;
+      playerTurn = true;
+      logEl.innerHTML = "";
+      inputEl.value = "";
+
+      // 開場詞（可改成隨機）
+      currentWord = "開心";
+      used.add(currentWord);
+      requiredChar = lastChar(currentWord);
+
+      addLog(`🎮 遊戲開始！起始詞：${currentWord}`);
+      addLog(`➡️ 請以「${requiredChar}」開頭接龍`);
+      setStatus("輪到你，請在 10 秒內輸入詞語。", "muted");
+
+      timer = MAX_TIME;
+      updateUI();
+      startPlayerTimer();
+      inputEl.focus();
+    }
+
+    submitBtn.addEventListener("click", playerSubmit);
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") playerSubmit();
+    });
+    restartBtn.addEventListener("click", startGame);
+
+    startGame();
+  </script>
+</body>
+</html>
