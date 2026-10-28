@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>糖果夾夾樂（Candy Claw）</title>
+  <style>
+    :root{
+      --bg1:#fff7fb;
+      --bg2:#eaf7ff;
+      --panel:#ffffffcc;
+      --pink:#ff8dc7;
+      --blue:#7fc8ff;
+      --text:#3d3d66;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:"PingFang TC","Microsoft JhengHei",sans-serif;
+      background:linear-gradient(180deg,var(--bg1),var(--bg2));
+      color:var(--text);
+      display:flex;
+      justify-content:center;
+      padding:16px;
+    }
+    .wrap{
+      width:min(96vw,980px);
+    }
+    .hud{
+      display:grid;
+      grid-template-columns:repeat(4,1fr);
+      gap:10px;
+      margin-bottom:12px;
+    }
+    .card{
+      background:var(--panel);
+      border:2px solid #ffffff;
+      border-radius:14px;
+      padding:10px 12px;
+      font-weight:700;
+      box-shadow:0 6px 18px rgba(72,100,170,.12);
+      text-align:center;
+    }
+    #msg{
+      margin:8px 0 10px;
+      min-height:24px;
+      font-weight:700;
+      text-align:center;
+    }
+    canvas{
+      width:100%;
+      max-width:980px;
+      height:auto;
+      display:block;
+      border-radius:18px;
+      background:linear-gradient(180deg,#dff5ff 0 58%,#ffeccf 58% 100%);
+      border:3px solid #fff;
+      box-shadow:0 10px 24px rgba(70,90,140,.18);
+      touch-action:manipulation;
+    }
+    .tips{
+      margin-top:10px;
+      text-align:center;
+      color:#5e6a88;
+      font-size:14px;
+    }
+    button{
+      margin-top:10px;
+      width:100%;
+      border:none;
+      border-radius:12px;
+      padding:12px;
+      font-weight:800;
+      cursor:pointer;
+      background:linear-gradient(90deg,#8ec5ff,#ff9ed1);
+      color:white;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hud">
+    <div class="card">關卡：<span id="level">1</span></div>
+    <div class="card">目標：<span id="targetName">巧克力</span></div>
+    <div class="card">進度：<span id="progress">0/1</span></div>
+    <div class="card">剩餘時間：<span id="time">30</span>s</div>
+  </div>
+  <div id="msg">點擊畫面或按空白鍵發射夾子！</div>
+  <canvas id="game" width="980" height="620"></canvas>
+  <button id="restartBtn">重新開始</button>
+  <div class="tips">操作：點擊 / 空白鍵發射夾子（手機可直接點畫面）</div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const ui = {
+    level: document.getElementById("level"),
+    targetName: document.getElementById("targetName"),
+    progress: document.getElementById("progress"),
+    time: document.getElementById("time"),
+    msg: document.getElementById("msg"),
+  };
+
+  const CANDY_NAMES = {
+    chocolate: "巧克力",
+    swiss: "瑞士糖",
+    lollipop: "棒棒糖",
+    gummy: "軟糖",
+  };
+
+  const LEVELS = [
+    { target: "chocolate", need: 1, time: 30 },
+    { target: "swiss", need: 1, time: 30 },
+    { target: "lollipop", need: 2, time: 35 },
+    { target: "gummy", need: 2, time: 35 },
+  ];
+
+  let levelIndex = 0;
+  let items = [];
+  let scoreTarget = 0;
+  let gameOver = false;
+
+  const claw = {
+    x: canvas.width / 2,
+    y: 80,
+    angle: -0.9,
+    dir: 1,
+    swingSpeed: 1.2,   // 擺盪速度
+    minAngle: -1.1,
+    maxAngle: 1.1,
+    len: 70,
+    maxLen: 500,
+    speed: 520,
+    state: "aim",      // aim | extend | retract
+    caught: null,
+  };
+
+  let remainTime = LEVELS[0].time;
+  let lastTs = 0;
+
+  function rand(min, max){ return Math.random() * (max - min) + min; }
+
+  function buildLevel() {
+    const lv = LEVELS[levelIndex];
+    remainTime = lv.time;
+    scoreTarget = 0;
+    gameOver = false;
+    claw.len = 70;
+    claw.state = "aim";
+    claw.caught = null;
+
+    const pool = [
+      ...Array(5).fill("chocolate"),
+      ...Array(5).fill("swiss"),
+      ...Array(5).fill("lollipop"),
+      ...Array(5).fill("gummy"),
+    ];
+
+    // 確保本關一定有足夠目標
+    for (let i = 0; i < lv.need; i++) pool[i] = lv.target;
+
+    items = [];
+    for (let i = 0; i < 18; i++) {
+      const type = pool[Math.floor(Math.random() * pool.length)];
+      items.push({
+        type,
+        x: rand(80, canvas.width - 80),
+        y: rand(canvas.height * 0.62, canvas.height - 50),
+        r: rand(18, 28),
+        taken: false
+      });
+    }
+
+    // 避免太擠重疊（簡化）
+    for (let k = 0; k < 120; k++) {
+      for (let i = 0; i < items.length; i++) {
+        for (let j = i + 1; j < items.length; j++) {
+          const a = items[i], b = items[j];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const d = Math.hypot(dx, dy);
+          const minD = a.r + b.r + 6;
+          if (d < minD) {
+            const push = (minD - d) * 0.5;
+            const nx = dx / (d || 1), ny = dy / (d || 1);
+            a.x -= nx * push; a.y -= ny * push;
+            b.x += nx * push; b.y += ny * push;
+          }
+        }
+      }
+    }
+
+    updateHUD();
+    setMsg(`第 ${levelIndex+1} 關：請夾到「${CANDY_NAMES[lv.target]}」x ${lv.need}`);
+  }
+
+  function updateHUD() {
+    const lv = LEVELS[levelIndex];
+    ui.level.textContent = levelIndex + 1;
+    ui.targetName.textContent = CANDY_NAMES[lv.target];
+    ui.progress.textContent = `${scoreTarget}/${lv.need}`;
+    ui.time.textContent = Math.max(0, remainTime).toFixed(1);
+  }
+
+  function setMsg(t, good=false) {
+    ui.msg.textContent = t;
+    ui.msg.style.color = good ? "#1f9d54" : "#4e5f8c";
+  }
+
+  function shoot() {
+    if (gameOver) return;
+    if (claw.state === "aim") {
+      claw.state = "extend";
+    }
+  }
+
+  function getTip() {
+    return {
+      x: claw.x + Math.sin(claw.angle) * claw.len,
+      y: claw.y + Math.cos(claw.angle) * claw.len
+    };
+  }
+
+  function update(dt) {
+    if (gameOver) return;
+
+    remainTime -= dt;
+    if (remainTime <= 0) {
+      remainTime = 0;
+      gameOver = true;
+      setMsg("時間到！這關失敗，請重新開始。");
+      updateHUD();
+      return;
+    }
+
+    if (claw.state === "aim") {
+      claw.angle += claw.dir * claw.swingSpeed * dt;
+      if (claw.angle > claw.maxAngle) { claw.angle = claw.maxAngle; claw.dir = -1; }
+      if (claw.angle < claw.minAngle) { claw.angle = claw.minAngle; claw.dir = 1; }
+    } else if (claw.state === "extend") {
+      claw.len += claw.speed * dt;
+      const tip = getTip();
+
+      // 碰撞檢測
+      let hit = null;
+      for (const it of items) {
+        if (it.taken) continue;
+        const d = Math.hypot(tip.x - it.x, tip.y - it.y);
+        if (d <= it.r + 7) {
+          hit = it;
+          break;
+        }
+      }
+
+      if (hit) {
+        hit.taken = true;
+        claw.caught = hit;
+        claw.state = "retract";
+      } else if (
+        claw.len >= claw.maxLen ||
+        tip.x <= 10 || tip.x >= canvas.width - 10 ||
+        tip.y >= canvas.height - 10
+      ) {
+        claw.state = "retract";
+      }
+    } else if (claw.state === "retract") {
+      const retractSpeed = claw.caught ? claw.speed * 0.72 : claw.speed;
+      claw.len -= retractSpeed * dt;
+
+      if (claw.caught) {
+        const tip = getTip();
+        claw.caught.x = tip.x;
+        claw.caught.y = tip.y;
+      }
+
+      if (claw.len <= 70) {
+        claw.len = 70;
+        if (claw.caught) {
+          const got = claw.caught.type;
+          const target = LEVELS[levelIndex].target;
+          if (got === target) {
+            scoreTarget++;
+            setMsg(`好棒！夾到目標「${CANDY_NAMES[got]}」`, true);
+          } else {
+            remainTime = Math.max(0, remainTime - 3);
+            setMsg(`夾到「${CANDY_NAMES[got]}」(非目標) ，扣 3 秒`);
+          }
+          claw.caught = null;
+        }
+        claw.state = "aim";
+      }
+    }
+
+    // 過關判定
+    const lv = LEVELS[levelIndex];
+    if (scoreTarget >= lv.need) {
+      if (levelIndex < LEVELS.length - 1) {
+        gameOver = true;
+        setMsg(`🎉 第 ${levelIndex+1} 關過關！準備下一關...`, true);
+        setTimeout(() => {
+          levelIndex++;
+          buildLevel();
+        }, 900);
+      } else {
+        gameOver = true;
+        setMsg("🏆 全部過關！你是糖果夾夾王！", true);
+      }
+    }
+
+    updateHUD();
+  }
+
+  function drawCandy(it) {
+    ctx.save();
+    ctx.translate(it.x, it.y);
+
+    // 卡通陰影
+    ctx.fillStyle = "rgba(0,0,0,.12)";
+    ctx.beginPath();
+    ctx.ellipse(0, it.r + 9, it.r*0.9, it.r*0.33, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    if (it.type === "chocolate") {
+      // 巧克力塊
+      ctx.fillStyle = "#7a4b2b";
+      roundRect(-it.r, -it.r, it.r*2, it.r*2, 6, true);
+      ctx.fillStyle = "#9a623d";
+      roundRect(-it.r+4, -it.r+4, it.r*2-8, it.r*2-8, 4, true);
+      ctx.fillStyle = "#b17a50";
+      ctx.fillRect(-it.r+6, -3, it.r*2-12, 6);
+    } else if (it.type === "swiss") {
+      // 瑞士糖（膠囊）
+      ctx.fillStyle = "#ff7eb8";
+      capsule(-it.r, -it.r*0.65, it.r*2, it.r*1.3);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(-5, -it.r*0.5, 10, it.r);
+      ctx.fillStyle = "#ffd5ea";
+      triangle(-it.r-10, 0, -it.r, -8, -it.r, 8);
+      triangle(it.r+10, 0, it.r, -8, it.r, 8);
+    } else if (it.type === "lollipop") {
+      // 棒棒糖
+      ctx.strokeStyle = "#d1b58a";
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(0, it.r*0.2);
+      ctx.lineTo(0, it.r+18);
+      ctx.stroke();
+      ctx.fillStyle = "#ff8fa3";
+      ctx.beginPath();
+      ctx.arc(0, -2, it.r*0.9, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff5";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, -2, it.r*0.55, 0, Math.PI*2);
+      ctx.stroke();
+    } else if (it.type === "gummy") {
+      // 軟糖熊（簡化）
+      ctx.fillStyle = "#79d8a8";
+      circle(0, 4, it.r*0.72, true);
+      circle(-it.r*0.4, -it.r*0.5, it.r*0.28, true);
+      circle(it.r*0.4, -it.r*0.5, it.r*0.28, true);
+      circle(-it.r*0.35, it.r*0.75, it.r*0.22, true);
+      circle(it.r*0.35, it.r*0.75, it.r*0.22, true);
+      ctx.fillStyle = "#fff";
+      circle(-it.r*0.18, 0, 2.5, true);
+      circle(it.r*0.18, 0, 2.5, true);
+    }
+    ctx.restore();
+  }
+
+  function drawClaw() {
+    const tip = getTip();
+
+    // 機台頂部
+    ctx.fillStyle = "#ffb3d8";
+    roundRect(claw.x - 70, 20, 140, 32, 16, true);
+    ctx.fillStyle = "#ffd2ea";
+    roundRect(claw.x - 58, 25, 116, 16, 8, true);
+
+    // 線
+    ctx.strokeStyle = "#8aa4c8";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(claw.x, claw.y);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.stroke();
+
+    // 可愛夾頭
+    ctx.save();
+    ctx.translate(tip.x, tip.y);
+    ctx.rotate(claw.angle);
+
+    // 中心頭
+    ctx.fillStyle = "#ff9acc";
+    roundRect(-12, -10, 24, 16, 7, true);
+
+    // 左右夾爪（可愛弧形）
+    ctx.strokeStyle = "#ff78ba";
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-6, 5);
+    ctx.quadraticCurveTo(-18, 14, -20, 30);
+    ctx.moveTo(6, 5);
+    ctx.quadraticCurveTo(18, 14, 20, 30);
+    ctx.stroke();
+
+    // 小臉
+    ctx.fillStyle = "#fff";
+    circle(-4, -2, 1.5, true);
+    circle(4, -2, 1.5, true);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 2, 3.5, 0.1, Math.PI-0.1);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawBackground() {
+    // 雲朵
+    drawCloud(150, 85, 0.9);
+    drawCloud(780, 110, 1.1);
+    drawCloud(560, 70, 0.75);
+
+    // 地面糖果點點
+    for (let i=0; i<18; i++) {
+      const x = 40 + i * 54;
+      const y = canvas.height - 25 - (i%3)*3;
+      ctx.fillStyle = ["#ff9ec9","#9fd7ff","#ffd37f"][i%3];
+      circle(x, y, 6, true);
+    }
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawBackground();
+
+    for (const it of items) {
+      if (!it.taken || it === claw.caught) drawCandy(it);
+    }
+
+    drawClaw();
+  }
+
+  function loop(ts) {
+    if (!lastTs) lastTs = ts;
+    const dt = Math.min(0.033, (ts - lastTs) / 1000);
+    lastTs = ts;
+
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // --- 小工具繪圖 ---
+  function circle(x,y,r,fill=false){
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+    if(fill) ctx.fill(); else ctx.stroke();
+  }
+  function roundRect(x,y,w,h,r,fill=false){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    if(fill) ctx.fill(); else ctx.stroke();
+  }
+  function capsule(x,y,w,h){
+    const r = h/2;
+    roundRect(x,y,w,h,r,true);
+  }
+  function triangle(x1,y1,x2,y2,x3,y3){
+    ctx.beginPath();
+    ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3);
+    ctx.closePath(); ctx.fill();
+  }
+  function drawCloud(x,y,s=1){
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.scale(s,s);
+    ctx.fillStyle = "rgba(255,255,255,.82)";
+    circle(-28, 6, 20, true);
+    circle(0, 0, 24, true);
+    circle(28, 7, 18, true);
+    roundRect(-40, 8, 80, 22, 11, true);
+    ctx.restore();
+  }
+
+  // 事件
+  canvas.addEventListener("pointerdown", shoot);
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") {
+      e.preventDefault();
+      shoot();
+    }
+  });
+
+  document.getElementById("restartBtn").addEventListener("click", () => {
+    levelIndex = 0;
+    buildLevel();
+  });
+
+  // 啟動
+  buildLevel();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
